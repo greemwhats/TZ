@@ -1,0 +1,6 @@
+---
+# vars file for deploy_zabbix_on_alpine
+
+postgresql_base: "/var/lib/postgresql/12/data/base"
+zabbix_db: "/usr/share/zabbix/database/postgresql"
+

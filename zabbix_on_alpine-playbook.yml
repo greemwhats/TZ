@@ -1,0 +1,8 @@
+---
+- name: Install zabbix on Alpine system
+  hosts: zabbix
+  become: yes
+
+
+  roles:
+     - {  role: deploy_zabbix_on_alpine, when: ansible_system == "Linux" }

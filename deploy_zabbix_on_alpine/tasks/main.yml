@@ -1,0 +1,173 @@
+---
+# tasks file for deploy_zabbix_on_alpine
+
+
+- name: uncomment a repo community
+  replace:
+         path: /etc/apk/repositories
+         backup: yes
+         regexp: '^#(.*[0-9]./community.*)'
+         replace: '\1'
+
+
+- name: update apk
+  apk:
+         update_cache: yes
+
+
+- name: Install the additional packages
+  apk:
+         name: [lighttpd, php7-common, php7-iconv, php7-json, php7-gd, php7-curl, php7-xml, php7-mysqli, php7-imap, php7-cgi,
+           fcgi, php7-pdo, php7-pdo_mysql, php7-soap, php7-xmlrpc, php7-posix, php7-mcrypt, php7-gettext, php7-ldap, php7-ctype,
+           php7-dom, python3, py3-pip,
+           gcc, python3-dev, musl-dev]
+         state: present
+
+
+- name: Uncomment line from /etc/lighttpd/lighttpd.conf
+  replace:
+         path: /etc/lighttpd/lighttpd.conf
+         backup: yes
+         regexp: '^#(.*include "mod_fastcgi.conf".*)'
+         replace: '\1'
+
+
+- name: Edit mod_fastcgi.conf
+  lineinfile:
+         path: /etc/lighttpd/mod_fastcgi.conf
+         backup: yes
+         state: present
+         regexp: '/usr/bin/php-cgi'
+         line: '                                  "bin-path"  =>              "/usr/bin/php-cgi7"
+'
+
+
+- name: Start lighttpd service and add to needed runlevel
+  service:
+         name:  lighttpd
+         state: started
+         enabled: yes
+
+
+- name: install packages for zabbix
+  apk:
+         name: [php7-pgsql, php7-mbstring]
+         state: present
+
+
+- name: install PostgreSQL
+  apk:
+         name: [postgresql, postgresql-client, postgresql-dev, py3-psycopg2]
+         state: present
+
+
+- name:  check PostgreSQL base exist
+  stat:
+         path: postgresql_base
+  register: p
+
+
+- name: postgresql setup
+  shell: "/etc/init.d/postgresql setup"
+  when: p.stat.isdir is defined and p.stat.isdir == False
+
+
+- name: Start postgresql service and add to needed runlevel
+  service:
+         name:  postgresql
+         state: started
+         enabled: yes
+
+
+- name: install zabbix
+  apk:
+         name: [zabbix, zabbix-pgsql, zabbix-webif, zabbix-setup]
+         state: present
+
+
+- name: Make sure psycopg2 is installed
+  pip:
+         name: psycopg2
+         state: present
+
+
+- name: Create a new database with name "zabbix"
+  postgresql_db:
+         login_user: postgres
+         db: zabbix
+         template: template0
+         encoding: 'UTF-8'
+         state: present
+
+
+- name: Add zabbix user to postgre
+  postgresql_user:
+         login_user: postgres
+         db: zabbix
+         name: zabbix
+         password: "zabbix"
+         priv: 'ALL'
+         state: present
+
+
+- name: copy .sql source files to postgresql directory for zabbix
+  copy:
+         src: "{{ item }}"
+         dest: "{{ zabbix_db }}"
+  with_items:
+         -  schema.sql
+         -  images.sql
+         -  data.sql
+
+
+- name: configure postgresql for zabbix
+  shell: "{{ item }}"
+  args:
+         chdir: "{{ zabbix_db }}"
+  with_items:
+         -  'cat schema.sql | sudo -u zabbix psql zabbix'
+         -  'cat images.sql | sudo -u zabbix psql zabbix'
+         -  'cat data.sql | sudo -u zabbix psql zabbix'
+
+
+- block:  #==========Block for zabbix frontend==========#
+    - name: remove directory /var/www/localhost/htdocs
+      file:
+         path: /var/www/localhost/htdocs
+         state: absent
+    - name: Create a softlink for the Zabbix web-frontend files
+      shell: "ln -s /usr/share/webapps/zabbix /var/www/localhost/htdocs"
+    - name: replace /etc/php7/php.ini file
+      copy:
+         src:  php.ini
+         dest: /etc/php7/php.ini
+    - name: Configure password in /etc/zabbix/zabbix_server.conf
+      lineinfile:
+         path: /etc/zabbix/zabbix_server.conf
+         backup: yes
+         regexp: '^# DBPassword='
+         line: 'DBPassword="zabbix"'
+    - name: Configure fping in /etc/zabbix/zabbix_server.conf
+      lineinfile:
+         path: /etc/zabbix/zabbix_server.conf
+         backup: yes
+         regexp: '^# FpingLocation=/usr/sbin/fping'
+         line: 'FpingLocation=/usr/sbin/fping'
+    - name: Start zabbix server and add to needed runlevel
+      service:
+         name:  zabbix-server
+         state: started
+         enabled: yes
+    - name: Fix permissions on conf directory
+      file:
+         path: /usr/share/webapps/zabbix/conf
+         state: directory
+         recurse: yes
+         owner: lighttpd
+    - name: Zabbix requires special permissions to use the fping binary
+      file:
+         path: /usr/sbin/fping
+         mode: u+s
+      notify:
+        - Restart Server
+#==========End Block for frontend==========#
